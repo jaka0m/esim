@@ -14,9 +14,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 TOKEN = "7791564952:AAEq0NXIKY0-BD7MmcDwwkiml4GGQw4a6-Y"
-GROUP_ID = -1002042632790
-CHANNEL_USERNAME = "@auto_sc" 
-ADMIN_ID = 1467883032
 
 app = FastAPI()
 telegram_app = None
@@ -27,13 +24,6 @@ active_loops = set()
 def sensor_text(text):
     if not text or len(text) <= 3: return "***"
     return text[:-3] + "***"
-
-async def is_user_joined(context, user_id):
-    try:
-        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except Exception:
-        return False
 
 class MailTMBot:
     def __init__(self):
@@ -293,19 +283,6 @@ async def process_xl_esim(chat_id, status_callback):
             return debug_path, str(e), None, None, None, None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not await is_user_joined(context, user_id):
-        keyboard = [
-            [InlineKeyboardButton("📢 Join Channel", url="https://t.me/forarieyproject")],
-            [InlineKeyboardButton("🔄 Cek Status Join", callback_data="check_join")]
-        ]
-        await update.message.reply_text(
-            "⚠️ <b>Akses Ditolak!</b>\n\n"
-            "Anda belum bergabung di channel kami. Silakan klik tombol di bawah untuk join:",
-            reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML"
-        )
-        return
-
     keyboard = [
         [InlineKeyboardButton("🚀 Mulai Claim Esim", callback_data="start_claim")],
         [InlineKeyboardButton("🔄 Claim Loop", callback_data="start_claim_loop")],
@@ -330,28 +307,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     user_id = query.from_user.id
     
-    if query.data == "check_join":
-        if await is_user_joined(context, user_id):
-            keyboard = [
-                [InlineKeyboardButton("🚀 Mulai Claim Esim", callback_data="start_claim")],
-                [InlineKeyboardButton("🔄 Claim Loop", callback_data="start_claim_loop")],
-                [InlineKeyboardButton("💰 Support Owner", callback_data="donation")],
-                [InlineKeyboardButton("🎦 Bot Alight Motion", url="https://t.me/amforariey_bot")],
-                [InlineKeyboardButton("🗨️ Channel Update", url="https://t.me/forarieyproject")]
-            ]
-            await query.edit_message_text("✅ <b>Terima kasih!</b> Anda telah bergabung.\nSilakan gunakan fitur bot:", 
-                                          reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
-        else:
-            await query.answer("❌ Anda belum bergabung di channel, silakan klik tombol Join!", show_alert=True)
-
-    elif query.data == "donation":
+    if query.data == "donation":
         await query.message.reply_text("Dana : 082151916181\nShopeepay : 082151916181")
         
     elif query.data == "start_claim_loop":
-        if not await is_user_joined(context, user_id):
-            await query.message.reply_text("⚠️ Silakan join channel @forarieyproject terlebih dahulu!")
-            return
-
         chat_id = query.message.chat.id
         if chat_id in active_loops:
             await query.message.reply_text("⚠️ Claim Loop sudah berjalan di chat ini! Kirim /stop untuk menghentikan.")
@@ -370,8 +329,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
-            user = query.from_user
-            username = f"@{user.username}" if user.username else user.first_name
             path, info, ms, pk, sm, ac = await process_xl_esim(chat_id, update_status)
             
             if chat_id not in active_loops:
@@ -388,20 +345,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML",
                     reply_markup=reply_markup_claim
                 )
-                
-                if ms:
-                    grup_text = (
-                        f"👤 Halo {username}\n\n"
-                        "✅ <b>Esim Berhasil Dibuat</b>\n\n"
-                        "<b>Detail Esim Private Kamu</b>\n"
-                        "<pre>MSISDN     : " + sensor_text(ms) + "\n"
-                        "Kode PUK   : " + sensor_text(pk) + "\n"
-                        "Address    : " + sm + "\n"
-                        "Activation : " + sensor_text(ac) + "\n\n"
-                        "CREATED    : @forariey\n"
-                        "Donation   : 082151916181</pre>"
-                    )
-                    await context.bot.send_message(chat_id=GROUP_ID, text=grup_text, parse_mode="HTML", reply_markup=reply_markup_claim)
                     
                 try:
                     os.remove(path)
@@ -424,10 +367,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await asyncio.sleep(5) # Jeda antar loop agar tidak terlalu spam
 
     elif query.data == "start_claim":
-        if not await is_user_joined(context, user_id):
-            await query.message.reply_text("⚠️ Silakan join channel @forarieyproject terlebih dahulu!")
-            return
-
         chat_id = query.message.chat.id
         msg = await query.message.reply_text("🚀 Bot Telegram aktif! Memproses klaim eSIM...")
         
@@ -437,8 +376,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-        user = query.from_user
-        username = f"@{user.username}" if user.username else user.first_name
         path, info, ms, pk, sm, ac = await process_xl_esim(chat_id, update_status)
         
         if path and "esim_" in path and os.path.exists(path):
@@ -452,20 +389,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
                 reply_markup=reply_markup_claim
             )
-            
-            if ms:
-                grup_text = (
-                    f"👤 Halo {username}\n\n"
-                    "✅ <b>Esim Berhasil Dibuat</b>\n\n"
-                    "<b>Detail Esim Private Kamu</b>\n"
-                    "<pre>MSISDN     : " + sensor_text(ms) + "\n"
-                    "Kode PUK   : " + sensor_text(pk) + "\n"
-                    "Address    : " + sm + "\n"
-                    "Activation : " + sensor_text(ac) + "\n\n"
-                    "CREATED    : @forariey\n"
-                    "Donation   : 082151916181</pre>"
-                )
-                await context.bot.send_message(chat_id=GROUP_ID, text=grup_text, parse_mode="HTML", reply_markup=reply_markup_claim)
                 
             try:
                 os.remove(path)
