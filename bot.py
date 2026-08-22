@@ -428,9 +428,17 @@ async def health_check():
     return Response(content="Bot is running smoothly!", status_code=200)
 
 @app.get("/go")
-async def setup_webhook():
+async def setup_webhook(request: Request):
     global telegram_app
-    webhook_url = "https://esima.up.railway.app/"
+    
+    # 1. Cek environment variable Railway terlebih dahulu
+    domain = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+    
+    # 2. Jika ada di env, gunakan itu. Jika tidak, ambil base_url dari FastAPI Request
+    if domain:
+        webhook_url = f"https://{domain}/"
+    else:
+        webhook_url = str(request.base_url) 
     
     try:
         success = await telegram_app.bot.set_webhook(url=webhook_url)
