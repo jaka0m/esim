@@ -1,10 +1,3 @@
-kenapa akses di tolak ya
-
-⚠️ Akses Ditolak!
-
-Anda belum bergabung di channel kami. Silakan klik tombol di bawah untuk join:
-
-
 import os
 import random
 import string
