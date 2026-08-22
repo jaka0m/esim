@@ -1,3 +1,10 @@
+kenapa akses di tolak ya
+
+⚠️ Akses Ditolak!
+
+Anda belum bergabung di channel kami. Silakan klik tombol di bawah untuk join:
+
+
 import os
 import random
 import string
@@ -15,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 TOKEN = "7791564952:AAEq0NXIKY0-BD7MmcDwwkiml4GGQw4a6-Y"
 GROUP_ID = -1002042632790
-CHANNEL_USERNAME = "@forarieyproject" 
+CHANNEL_USERNAME = "@auto_sc" 
 ADMIN_ID = 1467883032
 
 app = FastAPI()
