@@ -406,22 +406,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await context.bot.send_message(chat_id=chat_id, text=f"❌ <b>Gagal Memproses:</b>\n<pre>{info}</pre>", parse_mode="HTML")
 
-@app.post("/")
+WEBHOOK_URL = "https://esima.up.railway.app/aktif"
+
+@app.post("/aktif")
 async def webhook(request: Request):
     global telegram_app
     try:
         data = await request.json()
-        if "message" in data and "text" in data["message"]:
-            update = Update.de_json(data, telegram_app.bot)
-            if update and update.message:
-                await telegram_app.process_update(update)
-        elif "callback_query" in data:
-            update = Update.de_json(data, telegram_app.bot)
-            if update and update.callback_query:
-                await telegram_app.process_update(update)
+        update = Update.de_json(data, telegram_app.bot)
+        if update:
+            await telegram_app.process_update(update)
     except Exception as e:
         logger.error(f"Error pada webhook: {e}")
     return {"status": "ok"}
+
+@app.get("/aktif")
+async def aktif():
+    return Response(content="Bot aktif!", status_code=200)
 
 @app.get("/")
 async def health_check():
@@ -434,6 +435,11 @@ async def startup_event():
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(CommandHandler("stop", stop_command))
     telegram_app.add_handler(CallbackQueryHandler(button_handler))
+
     await telegram_app.initialize()
     await telegram_app.start()
-    logger.info("Bot Telegram webhook siap menerima koneksi di Railway...")
+
+    # Otomatis memasang webhook Telegram ketika Railway menjalankan aplikasi.
+    await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
+
+    logger.info(f"Bot Telegram aktif. Webhook: {WEBHOOK_URL}")
