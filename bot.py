@@ -7,7 +7,7 @@ import aiohttp
 import logging
 from fastapi import FastAPI, Request, Response
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -18,126 +18,35 @@ TOKEN = "7791564952:AAEq0NXIKY0-BD7MmcDwwkiml4GGQw4a6-Y"
 app = FastAPI()
 telegram_app = None
 
-# Variabel global untuk melacak status loop aktif per chat/user
+# Variabel global untuk melacak status loop aktif dan state input user
 active_loops = set()
+user_states = {} # Menyimpan state input dari user (email / otp)
 
-def sensor_text(text):
-    if not text or len(text) <= 3: return "***"
-    return text[:-3] + "***"
-
-class TempMailBot:
-    def __init__(self):
-        self.base_url = "https://www.1secmail.com/api/v1/"
-        self.login = ""
-        self.domain = ""
-        self.email = ""
-
-    async def create_account(self):
-        async with aiohttp.ClientSession() as session:
-            try:
-                # Menggunakan timeout 5 detik agar tidak stuck selamanya jika server luar lambat[span_1](start_span)[span_1](end_span)
-                async with session.get(f"{self.base_url}?action=getDomainList", timeout=5) as r:
-                    domains = await r.json()
-                    if domains and isinstance(domains, list):
-                        self.domain = random.choice(domains)
-                    else:
-                        raise Exception("Format domain tidak valid")
-            except Exception:
-                # Fallback otomatis ke domain cadangan jika API utama timeout/gagal[span_2](start_span)[span_2](end_span)
-                fallback_domains = ["1secmail.com", "1secmail.org", "1secmail.net"]
-                self.domain = random.choice(fallback_domains)
-            
-            self.login = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
-            self.email = f"{self.login}@{self.domain}"
-            
-        logger.info(f"Akun Temp Mail dibuat: {self.email}")
-
-    async def fetch_otp(self, timeout=60):
-        start_time = asyncio.get_event_loop().time()
+class ManualProcessManager:
+    @staticmethod
+    async def wait_for_user_input(chat_id, context, prompt_text, timeout=300):
+        """Fungsi pembantu untuk menjeda proses dan meminta input teks dari user di Telegram"""
+        msg = await context.bot.send_message(chat_id=chat_id, text=prompt_text, parse_mode="HTML")
+        user_states[chat_id] = asyncio.Future()
         
-        async with aiohttp.ClientSession() as session:
-            while (asyncio.get_event_loop().time() - start_time) < timeout:
-                try:
-                    url = f"{self.base_url}?action=getMessages&login={self.login}&domain={self.domain}"
-                    async with session.get(url) as r:
-                        messages = await r.json()
-                        if messages and len(messages) > 0:
-                            msg_id = messages[0]['id']
-                            detail_url = f"{self.base_url}?action=readMessage&login={self.login}&domain={self.domain}&id={msg_id}"
-                            async with session.get(detail_url) as r2:
-                                msg_detail = await r2.json()
-                                subject = msg_detail.get('subject', '')
-                                body = msg_detail.get('textBody', '') or msg_detail.get('body', '')
-                                
-                                combined_content = f"{subject} {body}"
-                                
-                                match = re.search(r'(?:otp\s*code|kode\s*konfirmasi|otp)[:\s\-]*([A-Za-z0-9]{6})', combined_content, re.IGNORECASE)
-                                if match:
-                                    logger.info(f"OTP berhasil dibaca: {match.group(1)}")
-                                    return match.group(1).strip()
-                                
-                                words = re.findall(r'\b[A-Z0-9]{6}\b', combined_content)
-                                if words:
-                                    for w in words:
-                                        if not any(x in w.lower() for x in ['emalupe', 'mail', 'http', 'com', 'co.id', 'xlsmart']):
-                                            return w
-                except Exception as e:
-                    logger.error(f"Error saat fetch OTP 1secmail: {e}")
-                await asyncio.sleep(2)
-        return None
+        try:
+            return await asyncio.wait_for(user_states[chat_id], timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+        finally:
+            user_states.pop(chat_id, None)
 
-    async def fetch_xl_confirmation_email(self, timeout=60):
-        start_time = asyncio.get_event_loop().time()
-        
-        async with aiohttp.ClientSession() as session:
-            logger.info("Menunggu email konfirmasi eSIM dari XL (1secmail)...")
-            while (asyncio.get_event_loop().time() - start_time) < timeout:
-                try:
-                    url = f"{self.base_url}?action=getMessages&login={self.login}&domain={self.domain}"
-                    async with session.get(url) as r:
-                        messages = await r.json()
-                        if messages and len(messages) > 0:
-                            msg_id = messages[0]['id']
-                            detail_url = f"{self.base_url}?action=readMessage&login={self.login}&domain={self.domain}&id={msg_id}"
-                            async with session.get(detail_url) as r2:
-                                msg_detail = await r2.json()
-                                subject = msg_detail.get('subject', '')
-                                body = msg_detail.get('textBody', '') or msg_detail.get('body', '')
-                                
-                                combined_content = f"{subject}\n{body}"
-                                
-                                if 'MSISDN' in combined_content or 'Activation Code' in combined_content or 'eSIM' in combined_content:
-                                    logger.info("Email sukses eSIM XL ditemukan, mengekstrak detail...")
-                                    
-                                    msisdn = re.search(r'MSISDN\s*[:\s\-]*([0-9\+\s]+)', combined_content, re.IGNORECASE)
-                                    puk = re.search(r'(?:Kode\s*PUK|PUK)\s*[:\s\-]*([0-9\s]+)', combined_content, re.IGNORECASE)
-                                    smdp = re.search(r'SM-DP\+?\s*Address\s*[:\s\-]*([a-zA-Z0-9\.\_\-]+)', combined_content, re.IGNORECASE)
-                                    act_code = re.search(r'Activation\s*Code\s*[:\s\-]*([a-zA-Z0-9\-]+)', combined_content, re.IGNORECASE)
-                                    
-                                    clean_msisdn = msisdn.group(1).strip() if msisdn else '-'
-                                    clean_puk = puk.group(1).strip() if puk else '-'
-                                    clean_smdp = smdp.group(1).strip() if smdp else '-'
-                                    clean_act = act_code.group(1).strip() if act_code else '-'
-                                    
-                                    extracted_info = (
-                                        "✅ <b>Berhasil Claim Esim 50GB 7Hari</b>\n\n"
-                                        "<b>Detail Esim Private Kamu</b>\n"
-                                        "<pre>MSISDN     : " + clean_msisdn + "\n"
-                                        "Kode PUK   : " + clean_puk + "\n"
-                                        "Address    : " + clean_smdp + "\n"
-                                        "Activation : " + clean_act + "\n\n"
-                                        "CREATED    : @forariey</pre>"
-                                    )
-                                    return extracted_info, clean_msisdn, clean_puk, clean_smdp, clean_act
-                except Exception as e:
-                    logger.error(f"Error saat ekstrak detail email XL: {e}")
-                await asyncio.sleep(3)
-        return f"Email konfirmasi dari XL belum diterima / timeout, akun terdaftar: {self.email}", None, None, None, None
+async def process_xl_esim_manual(chat_id, context, status_callback):
+    # 1. Minta user memasukkan email secara manual lewat Telegram
+    email_user = await ManualProcessManager.wait_for_user_input(
+        chat_id, context, 
+        "📧 <b>Silakan ketik/kirim Email Anda di sini:</b>\n(Contoh: namaemail@gmail.com)"
+    )
+    
+    if not email_user or "@" not in email_user:
+        return None, "Error: Email tidak valid atau waktu habis.", None, None, None, None
 
-async def process_xl_esim(chat_id, status_callback):
-    temp = TempMailBot()
-    await temp.create_account()
-
+    email_target = email_user.strip()
     full_name = f"mhmdsari{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}xlstore"
     whatsapp = "08" + ''.join(random.choices(string.digits, k=9))
     
@@ -167,12 +76,12 @@ async def process_xl_esim(chat_id, status_callback):
             await asyncio.sleep(2)
 
             logger.info("Isi data...")
-            await status_callback("📝 [LOG: 3/7] Mengisi data diri otomatis...")
+            await status_callback(f"📝 [LOG: 3/7] Mengisi email: <b>{email_target}</b>...")
             try:
                 inputs = await page.locator("input").all()
                 if len(inputs) >= 3:
                     await inputs[0].fill(full_name)
-                    await inputs[1].fill(temp.email)
+                    await inputs[1].fill(email_target) # Menggunakan email murni ketikan user
                     await inputs[2].fill(whatsapp)
                 else:
                     raise Exception("Gagal mendeteksi input form")
@@ -199,15 +108,18 @@ async def process_xl_esim(chat_id, status_callback):
                 logger.error(f"Error saat klik Lanjut/Checkbox: {e}")
                 raise Exception("Error: Gagal mencentang syarat & ketentuan atau tombol lanjut.")
 
-            logger.info("Menunggu OTP...")
-            await status_callback(f"⏳ [LOG: 5/7] Menunggu OTP masuk ke `{temp.email}`...")
-            otp = await temp.fetch_otp(timeout=60)
+            # 2. Minta user memasukkan OTP secara manual lewat Telegram
+            await status_callback(f"⏳ [LOG: 5/7] OTP dikirim ke <b>{email_target}</b>. Silakan cek email Anda!")
+            otp_user = await ManualProcessManager.wait_for_user_input(
+                chat_id, context,
+                f"🔑 <b>Masukkan Kode OTP yang masuk ke email ({email_target}):</b>\n(Ketik 6 digit kode OTP saja)"
+            )
             
-            if not otp: 
-                await page.screenshot(path=debug_path)
-                raise Exception("Error: Waktu tunggu OTP habis (Timeout).")
+            if not otp_user:
+                raise Exception("Error: Waktu input OTP habis.")
             
-            logger.info(f"Input OTP: {otp}")
+            otp = otp_user.strip()
+            logger.info(f"Input OTP manual: {otp}")
             await status_callback(f"✅ [LOG: OTP OK] Kode: `{otp}`. Memasukkan ke sistem...")
             
             try:
@@ -265,19 +177,24 @@ async def process_xl_esim(chat_id, status_callback):
             }""")
 
             logger.info("Proses akhir QR...")
-            await status_callback("⏳ Sedang memproses eSIM di server XL (Menunggu QR & Email)...")
+            await status_callback("⏳ Sedang memproses eSIM di server XL (Menunggu QR Code)...")
             await asyncio.sleep(10) 
             
-            await status_callback("✨ QR Code berhasil dimuat! Mengambil screenshot & membaca detail email...")
+            await status_callback("✨ QR Code berhasil dimuat! Mengambil screenshot...")
             await page.screenshot(path=screenshot_path, full_page=True)
             await browser.close()
             
             if os.path.exists(debug_path):
                 os.remove(debug_path)
                 
-            info, ms, pk, sm, ac = await temp.fetch_xl_confirmation_email(timeout=60)
+            extracted_info = (
+                "✅ <b>Berhasil Claim Esim 50GB 7Hari</b>\n\n"
+                f"<b>Email Digunakan:</b> {email_target}\n"
+                "Silakan cek QR Code di atas dan email Anda untuk detail lengkapnya.\n\n"
+                "<b>CREATED:</b> @forariey"
+            )
                 
-            return screenshot_path, info, ms, pk, sm, ac
+            return screenshot_path, extracted_info, None, None, None, None
 
         except Exception as e:
             logger.error(f"Error di proses utama: {e}")
@@ -290,8 +207,7 @@ async def process_xl_esim(chat_id, status_callback):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🚀 Mulai Claim Esim", callback_data="start_claim")],
-        [InlineKeyboardButton("🔄 Claim Loop", callback_data="start_claim_loop")],
+        [InlineKeyboardButton("🚀 Mulai Claim Esim (Manual)", callback_data="start_claim")],
         [InlineKeyboardButton("💰 Support Owner", callback_data="donation")],
         [InlineKeyboardButton("🎦 Bot Alight Motion", url="https://t.me/amforariey_bot")],
         [InlineKeyboardButton("🗨️ Channel Update", url="https://t.me/forarieyproject")]
@@ -300,81 +216,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 <b>Selamat datang di Bot Claim eSIM XL!</b>\nSilakan pilih menu di bawah:", 
                                    reply_markup=reply_markup, parse_mode="HTML")
 
-async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Menangkap input teks yang dikirim user saat bot meminta email atau OTP"""
     chat_id = update.effective_chat.id
-    if chat_id in active_loops:
-        active_loops.remove(chat_id)
-        await update.message.reply_text("🛑 <b>Claim Loop berhasil dihentikan!</b>", parse_mode="HTML")
-    else:
-        await update.message.reply_text("⚠️ Tidak ada proses Claim Loop yang sedang berjalan.", parse_mode="HTML")
+    text = update.message.text
+    
+    if chat_id in user_states:
+        future = user_states[chat_id]
+        if not future.done():
+            future.set_result(text)
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = query.from_user.id
     
     if query.data == "donation":
         await query.message.reply_text("Dana : 082151916181\nShopeepay : 082151916181")
         
-    elif query.data == "start_claim_loop":
-        chat_id = query.message.chat.id
-        if chat_id in active_loops:
-            await query.message.reply_text("⚠️ Claim Loop sudah berjalan di chat ini! Kirim /stop untuk menghentikan.")
-            return
-
-        active_loops.add(chat_id)
-        await query.message.reply_text("🔄 <b>Claim Loop diaktifkan!</b> Bot akan melakukan klaim eSIM secara terus-menerus.\nKetik /stop kapan saja untuk menghentikan.", parse_mode="HTML")
-
-        loop_count = 1
-        while chat_id in active_loops:
-            msg = await context.bot.send_message(chat_id=chat_id, text=f"🚀 <b>[Loop ke-{loop_count}]</b> Memulai proses klaim eSIM...", parse_mode="HTML")
-            
-            async def update_status(text):
-                try:
-                    await context.bot.edit_message_text(text=f"<b>[Loop ke-{loop_count}]</b>\n{text}", chat_id=chat_id, message_id=msg.message_id, parse_mode="HTML")
-                except Exception:
-                    pass
-
-            path, info, ms, pk, sm, ac = await process_xl_esim(chat_id, update_status)
-            
-            if chat_id not in active_loops:
-                break
-
-            if path and "esim_" in path and os.path.exists(path):
-                caption = info
-                keyboard_claim = [[InlineKeyboardButton("🧩 Register Biometrik", url="https://registrasi.xl.co.id")]]
-                reply_markup_claim = InlineKeyboardMarkup(keyboard_claim)
-                await context.bot.send_photo(
-                    chat_id=chat_id, 
-                    photo=open(path, 'rb'), 
-                    caption=caption, 
-                    parse_mode="HTML",
-                    reply_markup=reply_markup_claim
-                )
-                    
-                try:
-                    os.remove(path)
-                except Exception:
-                    pass
-            else:
-                if path and os.path.exists(path):
-                    await context.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=open(path, 'rb'),
-                        caption=f"❌ <b>Gagal Memproses (Loop {loop_count}):</b>\n<pre>{info}</pre>",
-                        parse_mode="HTML"
-                    )
-                    os.remove(path)
-                else:
-                    await context.bot.send_message(chat_id=chat_id, text=f"❌ <b>Gagal Memproses (Loop {loop_count}):</b>\n<pre>{info}</pre>", parse_mode="HTML")
-
-            loop_count += 1
-            if chat_id in active_loops:
-                await asyncio.sleep(5)
-
     elif query.data == "start_claim":
         chat_id = query.message.chat.id
-        msg = await query.message.reply_text("🚀 Bot Telegram aktif! Memproses klaim eSIM...")
+        msg = await query.message.reply_text("🚀 Memulai sesi klaim eSIM interaktif...")
         
         async def update_status(text):
             try:
@@ -382,7 +247,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-        path, info, ms, pk, sm, ac = await process_xl_esim(chat_id, update_status)
+        path, info, ms, pk, sm, ac = await process_xl_esim_manual(chat_id, context, update_status)
         
         if path and "esim_" in path and os.path.exists(path):
             caption = info
@@ -395,7 +260,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
                 reply_markup=reply_markup_claim
             )
-                
             try:
                 os.remove(path)
             except Exception:
@@ -417,7 +281,7 @@ async def webhook(request: Request):
     global telegram_app
     try:
         data = await request.json()
-        if "message" in data and "text" in data["message"]:
+        if "message" in data:
             update = Update.de_json(data, telegram_app.bot)
             if update and update.message:
                 await telegram_app.process_update(update)
@@ -458,8 +322,8 @@ async def startup_event():
     global telegram_app
     telegram_app = Application.builder().token(TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start))
-    telegram_app.add_handler(CommandHandler("stop", stop_command))
     telegram_app.add_handler(CallbackQueryHandler(button_handler))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     await telegram_app.initialize()
     await telegram_app.start()
-    logger.info("Bot Telegram webhook siap menerima koneksi di Railway...")
+    logger.info("Bot Telegram webhook siap menerima koneksi interaktif di Railway...")
