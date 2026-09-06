@@ -33,18 +33,27 @@ class MailTMBot:
 
     async def create_account(self):
         async with aiohttp.ClientSession() as session:
+            target_domain = "uberip.com"
+            domain = target_domain
+            
+            # Ambil daftar domain dari Mail.tm
             async with session.get(f"{self.base_url}/domains") as r:
                 domains = await r.json()
-                domain = domains['hydra:member'][0]['domain']
-                user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-                self.email = f"{user}@{domain}"
+                domain_list = [d['domain'] for d in domains.get('hydra:member', [])]
+                
+                # Jika uberip.com tidak ada, gunakan domain pertama yang tersedia
+                if target_domain not in domain_list and domain_list:
+                    domain = domain_list[0]
+
+            user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+            self.email = f"{user}@{domain}"
             
             payload = {"address": self.email, "password": "Password123!"}
             await session.post(f"{self.base_url}/accounts", json=payload)
             async with session.post(f"{self.base_url}/token", json=payload) as r:
                 data = await r.json()
                 self.token = data.get('token', '')
-        logger.info(f"Akun Mail.tm dibuat: {self.email}")
+        logger.info(f"Akun Mail.tm dibuat dengan domain {domain}: {self.email}")
 
     async def fetch_otp(self, timeout=60):
         headers = {"Authorization": f"Bearer {self.token}"}
