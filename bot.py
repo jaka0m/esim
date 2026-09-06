@@ -25,116 +25,34 @@ def sensor_text(text):
     if not text or len(text) <= 3: return "***"
     return text[:-3] + "***"
 
-class TempMailBot:
+class FixedEmailBot:
     def __init__(self):
-        # Menggunakan API 1SecMail sebagai pengganti Mail.tm / uberip.com
-        self.base_url = "https://www.1secmail.com/api/v1/"
-        self.login = ""
-        self.domain = ""
-        self.email = ""
+        # Menggunakan email tetap sesuai permintaan Anda
+        self.email = "en947td25wkc@unique.kdns.fr"
+        # Catatan: Karena menggunakan email statis/tetap, pastikan Anda bisa mengecek 
+        # kotak masuk (inbox) email ini secara manual atau via web penyedianya jika 
+        # bot butuh membaca OTP secara otomatis.
 
     async def create_account(self):
-        async with aiohttp.ClientSession() as session:
-            # 1. Ambil daftar domain aktif dari 1secmail
-            async with session.get(f"{self.base_url}?action=getDomainList") as r:
-                domains = await r.json()
-                if not domains:
-                    raise Exception("Gagal mengambil daftar domain temp mail.")
-                self.domain = random.choice(domains)
-            
-            # 2. Buat username random
-            self.login = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
-            self.email = f"{self.login}@{self.domain}"
-            
-        logger.info(f"Akun Temp Mail dibuat menggunakan penyedia baru: {self.email}")
+        # Lewati pembuatan akun otomatis karena menggunakan email tetap
+        logger.info(f"Menggunakan email tetap: {self.email}")
+        await asyncio.sleep(0.5)
 
     async def fetch_otp(self, timeout=60):
-        start_time = asyncio.get_event_loop().time()
-        
-        async with aiohttp.ClientSession() as session:
-            while (asyncio.get_event_loop().time() - start_time) < timeout:
-                try:
-                    # Cek inbox pesan masuk
-                    url = f"{self.base_url}?action=getMessages&login={self.login}&domain={self.domain}"
-                    async with session.get(url) as r:
-                        messages = await r.json()
-                        if messages and len(messages) > 0:
-                            msg_id = messages[0]['id']
-                            # Ambil detail isi pesan
-                            detail_url = f"{self.base_url}?action=readMessage&login={self.login}&domain={self.domain}&id={msg_id}"
-                            async with session.get(detail_url) as r2:
-                                msg_detail = await r2.json()
-                                subject = msg_detail.get('subject', '')
-                                body = msg_detail.get('textBody', '') or msg_detail.get('body', '')
-                                
-                                combined_content = f"{subject} {body}"
-                                
-                                # Cari kode OTP 6 digit
-                                match = re.search(r'(?:otp\s*code|kode\s*konfirmasi|otp)[:\s\-]*([A-Za-z0-9]{6})', combined_content, re.IGNORECASE)
-                                if match:
-                                    logger.info(f"OTP berhasil dibaca: {match.group(1)}")
-                                    return match.group(1).strip()
-                                
-                                words = re.findall(r'\b[A-Z0-9]{6}\b', combined_content)
-                                if words:
-                                    for w in words:
-                                        if not any(x in w.lower() for x in ['emalupe', 'mail', 'http', 'com', 'co.id', 'xlsmart']):
-                                            return w
-                except Exception as e:
-                    logger.error(f"Error saat fetch OTP 1secmail: {e}")
-                await asyncio.sleep(2)
+        # Jika Anda menggunakan email tetap, sistem otomatisasi API Mail.tm/1secmail 
+        # tidak bisa membaca inbox-nya secara otomatis kecuali via webmail aslinya.
+        # Bagian ini akan menunggu durasi timeout atau Anda bisa sesuaikan jika punya API pembaca inbox-nya.
+        logger.info(f"Menunggu OTP untuk email {self.email} (Silakan cek inbox email Anda manual jika perlu)...")
+        await asyncio.sleep(timeout)
         return None
 
     async def fetch_xl_confirmation_email(self, timeout=60):
-        start_time = asyncio.get_event_loop().time()
-        
-        async with aiohttp.ClientSession() as session:
-            logger.info("Menunggu email konfirmasi eSIM dari XL (1secmail)...")
-            while (asyncio.get_event_loop().time() - start_time) < timeout:
-                try:
-                    url = f"{self.base_url}?action=getMessages&login={self.login}&domain={self.domain}"
-                    async with session.get(url) as r:
-                        messages = await r.json()
-                        if messages and len(messages) > 0:
-                            msg_id = messages[0]['id']
-                            detail_url = f"{self.base_url}?action=readMessage&login={self.login}&domain={self.domain}&id={msg_id}"
-                            async with session.get(detail_url) as r2:
-                                msg_detail = await r2.json()
-                                subject = msg_detail.get('subject', '')
-                                body = msg_detail.get('textBody', '') or msg_detail.get('body', '')
-                                
-                                combined_content = f"{subject}\n{body}"
-                                
-                                if 'MSISDN' in combined_content or 'Activation Code' in combined_content or 'eSIM' in combined_content:
-                                    logger.info("Email sukses eSIM XL ditemukan, mengekstrak detail...")
-                                    
-                                    msisdn = re.search(r'MSISDN\s*[:\s\-]*([0-9\+\s]+)', combined_content, re.IGNORECASE)
-                                    puk = re.search(r'(?:Kode\s*PUK|PUK)\s*[:\s\-]*([0-9\s]+)', combined_content, re.IGNORECASE)
-                                    smdp = re.search(r'SM-DP\+?\s*Address\s*[:\s\-]*([a-zA-Z0-9\.\_\-]+)', combined_content, re.IGNORECASE)
-                                    act_code = re.search(r'Activation\s*Code\s*[:\s\-]*([a-zA-Z0-9\-]+)', combined_content, re.IGNORECASE)
-                                    
-                                    clean_msisdn = msisdn.group(1).strip() if msisdn else '-'
-                                    clean_puk = puk.group(1).strip() if puk else '-'
-                                    clean_smdp = smdp.group(1).strip() if smdp else '-'
-                                    clean_act = act_code.group(1).strip() if act_code else '-'
-                                    
-                                    extracted_info = (
-                                        "✅ <b>Berhasil Claim Esim 50GB 7Hari</b>\n\n"
-                                        "<b>Detail Esim Private Kamu</b>\n"
-                                        "<pre>MSISDN     : " + clean_msisdn + "\n"
-                                        "Kode PUK   : " + clean_puk + "\n"
-                                        "Address    : " + clean_smdp + "\n"
-                                        "Activation : " + clean_act + "\n\n"
-                                        "CREATED    : @forariey</pre>"
-                                    )
-                                    return extracted_info, clean_msisdn, clean_puk, clean_smdp, clean_act
-                except Exception as e:
-                    logger.error(f"Error saat ekstrak detail email XL: {e}")
-                await asyncio.sleep(3)
-        return f"Email konfirmasi dari XL belum diterima / timeout, akun terdaftar: {self.email}", None, None, None, None
+        logger.info(f"Menunggu email konfirmasi eSIM untuk {self.email}...")
+        await asyncio.sleep(timeout)
+        return f"Menggunakan email statis: {self.email}. Silakan cek inbox email tersebut secara manual.", None, None, None, None
 
 async def process_xl_esim(chat_id, status_callback):
-    temp = TempMailBot()
+    temp = FixedEmailBot()
     await temp.create_account()
 
     full_name = f"mhmdsari{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}xlstore"
@@ -204,7 +122,7 @@ async def process_xl_esim(chat_id, status_callback):
             
             if not otp: 
                 await page.screenshot(path=debug_path)
-                raise Exception("Error: Waktu tunggu OTP habis (Timeout).")
+                raise Exception("Error: Waktu tunggu OTP habis (Karena menggunakan email statis tanpa API pembaca inbox otomatis).")
             
             logger.info(f"Input OTP: {otp}")
             await status_callback(f"✅ [LOG: OTP OK] Kode: `{otp}`. Memasukkan ke sistem...")
