@@ -186,12 +186,26 @@ async def process_xl_esim(chat_id, status_callback):
                 logger.error(f"Error isi data: {e}")
                 raise Exception("Error: Form input tidak ditemukan.")
 
-            logger.info("Kirim OTP...")
-            await status_callback("📤 [LOG: 4/7] Mengirim permintaan OTP...")
+            logger.info("Ceklis T&C dan Kirim OTP...")
+            await status_callback("📤 [LOG: 4/7] Mencentang persetujuan & mengirim OTP...")
             try:
-                await page.get_by_role("button", name="Lanjut").click(timeout=15000)
-            except Exception:
-                await page.click("button:has-text('Lanjut'), button:has-text('Kirim')")
+                # Otomatis centang checkbox Terms & Conditions jika ada
+                checkbox = page.locator("input[type='checkbox']")
+                if await checkbox.count() > 0:
+                    await checkbox.first.click(force=True)
+                    await asyncio.sleep(1)
+
+                # Klik tombol Setuju / Lanjut
+                try:
+                    await page.get_by_role("button", name="Setuju").click(timeout=5000)
+                except Exception:
+                    try:
+                        await page.get_by_role("button", name="Lanjut").click(timeout=5000)
+                    except Exception:
+                        await page.click("button:has-text('Setuju'), button:has-text('Lanjut'), button:has-text('Kirim')", timeout=5000)
+            except Exception as e:
+                logger.error(f"Error saat klik Lanjut/Checkbox: {e}")
+                raise Exception("Error: Gagal mencentang syarat & ketentuan atau tombol lanjut.")
 
             logger.info("Menunggu OTP...")
             await status_callback(f"⏳ [LOG: 5/7] Menunggu OTP masuk ke `{temp.email}`...")
@@ -364,7 +378,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             loop_count += 1
             if chat_id in active_loops:
-                await asyncio.sleep(5) # Jeda antar loop agar tidak terlalu spam
+                await asyncio.sleep(5)
 
     elif query.data == "start_claim":
         chat_id = query.message.chat.id
@@ -430,11 +444,7 @@ async def health_check():
 @app.get("/go")
 async def setup_webhook(request: Request):
     global telegram_app
-    
-    # 1. Cek environment variable Railway terlebih dahulu
     domain = os.getenv("RAILWAY_PUBLIC_DOMAIN")
-    
-    # 2. Jika ada di env, gunakan itu. Jika tidak, ambil base_url dari FastAPI Request
     if domain:
         webhook_url = f"https://{domain}/"
     else:
