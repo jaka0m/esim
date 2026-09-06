@@ -33,17 +33,21 @@ class MailTMBot:
 
     async def create_account(self):
         async with aiohttp.ClientSession() as session:
-            target_domain = "uberip.com"
-            domain = target_domain
-            
-            # Ambil daftar domain dari Mail.tm
+            # Ambil daftar domain dari Mail.tm[span_1](start_span)[span_1](end_span)
             async with session.get(f"{self.base_url}/domains") as r:
                 domains = await r.json()
                 domain_list = [d['domain'] for d in domains.get('hydra:member', [])]
                 
-                # Jika uberip.com tidak ada, gunakan domain pertama yang tersedia
-                if target_domain not in domain_list and domain_list:
+                # Filter/buang domain uberip.com agar tidak dipakai[span_2](start_span)[span_2](end_span)
+                filtered_domains = [d for d in domain_list if "uberip.com" not in d.lower()]
+                
+                # Pilih domain secara acak selain uberrip.com, atau fallback ke yang tersedia[span_3](start_span)[span_3](end_span)
+                if filtered_domains:
+                    domain = random.choice(filtered_domains)
+                elif domain_list:
                     domain = domain_list[0]
+                else:
+                    raise Exception("Tidak ada domain yang tersedia di Mail.tm.")
 
             user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
             self.email = f"{user}@{domain}"
@@ -53,7 +57,7 @@ class MailTMBot:
             async with session.post(f"{self.base_url}/token", json=payload) as r:
                 data = await r.json()
                 self.token = data.get('token', '')
-        logger.info(f"Akun Mail.tm dibuat dengan domain {domain}: {self.email}")
+        logger.info(f"Akun Mail.tm dibuat (Tanpa uberip.com) menggunakan domain {domain}: {self.email}")
 
     async def fetch_otp(self, timeout=60):
         headers = {"Authorization": f"Bearer {self.token}"}
@@ -198,13 +202,13 @@ async def process_xl_esim(chat_id, status_callback):
             logger.info("Ceklis T&C dan Kirim OTP...")
             await status_callback("📤 [LOG: 4/7] Mencentang persetujuan & mengirim OTP...")
             try:
-                # Otomatis centang checkbox Terms & Conditions jika ada
+                # Otomatis centang checkbox Terms & Conditions[span_4](start_span)[span_4](end_span)
                 checkbox = page.locator("input[type='checkbox']")
                 if await checkbox.count() > 0:
                     await checkbox.first.click(force=True)
                     await asyncio.sleep(1)
 
-                # Klik tombol Setuju / Lanjut
+                # Klik tombol Setuju / Lanjut[span_5](start_span)[span_5](end_span)
                 try:
                     await page.get_by_role("button", name="Setuju").click(timeout=5000)
                 except Exception:
