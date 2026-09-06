@@ -81,7 +81,7 @@ async def process_xl_esim_manual(chat_id, context, status_callback):
                 inputs = await page.locator("input").all()
                 if len(inputs) >= 3:
                     await inputs[0].fill(full_name)
-                    await inputs[1].fill(email_target) # Menggunakan email murni ketikan user
+                    await inputs[1].fill(email_target) # Menggunakan email murni ketikan user[span_1](start_span)[span_1](end_span)
                     await inputs[2].fill(whatsapp)
                 else:
                     raise Exception("Gagal mendeteksi input form")
