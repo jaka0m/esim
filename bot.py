@@ -25,134 +25,116 @@ def sensor_text(text):
     if not text or len(text) <= 3: return "***"
     return text[:-3] + "***"
 
-class MailTMBot:
+class TempMailBot:
     def __init__(self):
-        self.base_url = "https://api.mail.tm"
+        # Menggunakan API 1SecMail sebagai pengganti Mail.tm / uberip.com
+        self.base_url = "https://www.1secmail.com/api/v1/"
+        self.login = ""
+        self.domain = ""
         self.email = ""
-        self.token = ""
 
     async def create_account(self):
         async with aiohttp.ClientSession() as session:
-            # Ambil daftar domain dari Mail.tm[span_1](start_span)[span_1](end_span)
-            async with session.get(f"{self.base_url}/domains") as r:
+            # 1. Ambil daftar domain aktif dari 1secmail
+            async with session.get(f"{self.base_url}?action=getDomainList") as r:
                 domains = await r.json()
-                domain_list = [d['domain'] for d in domains.get('hydra:member', [])]
-                
-                # Buang domain uberip.com dari daftar[span_2](start_span)[span_2](end_span)
-                filtered_domains = [d for d in domain_list if "uberip.com" not in d.lower()]
-                
-                # Tolak proses jika tidak ada domain lain selain uberip.com
-                if not filtered_domains:
-                    raise Exception("Error: Mail.tm sedang tidak menyediakan domain lain selain uberip.com!")
-                
-                domain = random.choice(filtered_domains)
-
-            user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-            self.email = f"{user}@{domain}"
+                if not domains:
+                    raise Exception("Gagal mengambil daftar domain temp mail.")
+                self.domain = random.choice(domains)
             
-            payload = {"address": self.email, "password": "Password123!"}
-            await session.post(f"{self.base_url}/accounts", json=payload)
-            async with session.post(f"{self.base_url}/token", json=payload) as r:
-                data = await r.json()
-                self.token = data.get('token', '')
-        logger.info(f"Akun Mail.tm dibuat menggunakan domain bersih {domain}: {self.email}")
+            # 2. Buat username random
+            self.login = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+            self.email = f"{self.login}@{self.domain}"
+            
+        logger.info(f"Akun Temp Mail dibuat menggunakan penyedia baru: {self.email}")
 
     async def fetch_otp(self, timeout=60):
-        headers = {"Authorization": f"Bearer {self.token}"}
         start_time = asyncio.get_event_loop().time()
         
-        async with aiohttp.ClientSession(headers=headers) as session:
+        async with aiohttp.ClientSession() as session:
             while (asyncio.get_event_loop().time() - start_time) < timeout:
                 try:
-                    async with session.get(f"{self.base_url}/messages", headers={**headers, "Cache-Control": "no-cache"}) as r:
-                        data = await r.json()
-                        if data.get('hydra:totalItems', 0) > 0:
-                            for msg in data['hydra:member']:
-                                msg_id = msg['id']
-                                async with session.get(f"{self.base_url}/messages/{msg_id}", headers=headers) as r2:
-                                    msg_detail = await r2.json()
-                                    raw_text = msg_detail.get('text', '') or ''
-                                    raw_html = msg_detail.get('html', '') or ''
-                                    subject = msg_detail.get('subject', '') or ''
-                                    
-                                    if isinstance(raw_text, list): raw_text = "\n".join(str(x) for x in raw_text)
-                                    if isinstance(raw_html, list): raw_html = "\n".join(str(x) for x in raw_html)
-                                    if isinstance(subject, list): subject = " ".join(str(x) for x in subject)
-
-                                    combined_content = f"{subject} {raw_text} {raw_html}"
-                                    
-                                    match = re.search(r'(?:otp\s*code|kode\s*konfirmasi|otp)[:\s\-]*([A-Za-z0-9]{6})', combined_content, re.IGNORECASE)
-                                    if match:
-                                        logger.info(f"OTP berhasil dibaca: {match.group(1)}")
-                                        return match.group(1).strip()
-                                    words = re.findall(r'\b[A-Z0-9]{6}\b', combined_content)
-                                    if words:
-                                        for w in words:
-                                            if not any(x in w.lower() for x in ['emalupe', 'mail', 'http', 'com', 'co.id', 'xlsmart']):
-                                                return w
+                    # Cek inbox pesan masuk
+                    url = f"{self.base_url}?action=getMessages&login={self.login}&domain={self.domain}"
+                    async with session.get(url) as r:
+                        messages = await r.json()
+                        if messages and len(messages) > 0:
+                            msg_id = messages[0]['id']
+                            # Ambil detail isi pesan
+                            detail_url = f"{self.base_url}?action=readMessage&login={self.login}&domain={self.domain}&id={msg_id}"
+                            async with session.get(detail_url) as r2:
+                                msg_detail = await r2.json()
+                                subject = msg_detail.get('subject', '')
+                                body = msg_detail.get('textBody', '') or msg_detail.get('body', '')
+                                
+                                combined_content = f"{subject} {body}"
+                                
+                                # Cari kode OTP 6 digit
+                                match = re.search(r'(?:otp\s*code|kode\s*konfirmasi|otp)[:\s\-]*([A-Za-z0-9]{6})', combined_content, re.IGNORECASE)
+                                if match:
+                                    logger.info(f"OTP berhasil dibaca: {match.group(1)}")
+                                    return match.group(1).strip()
+                                
+                                words = re.findall(r'\b[A-Z0-9]{6}\b', combined_content)
+                                if words:
+                                    for w in words:
+                                        if not any(x in w.lower() for x in ['emalupe', 'mail', 'http', 'com', 'co.id', 'xlsmart']):
+                                            return w
                 except Exception as e:
-                    logger.error(f"Error saat fetch OTP: {e}")
-                await asyncio.sleep(0.5)
+                    logger.error(f"Error saat fetch OTP 1secmail: {e}")
+                await asyncio.sleep(2)
         return None
 
     async def fetch_xl_confirmation_email(self, timeout=60):
-        headers = {"Authorization": f"Bearer {self.token}"}
         start_time = asyncio.get_event_loop().time()
         
-        async with aiohttp.ClientSession(headers=headers) as session:
-            logger.info("Menunggu email konfirmasi eSIM dari XL...")
+        async with aiohttp.ClientSession() as session:
+            logger.info("Menunggu email konfirmasi eSIM dari XL (1secmail)...")
             while (asyncio.get_event_loop().time() - start_time) < timeout:
                 try:
-                    async with session.get(f"{self.base_url}/messages", headers={**headers, "Cache-Control": "no-cache"}) as r:
-                        data = await r.json()
-                        if data.get('hydra:totalItems', 0) > 0:
-                            for msg in data['hydra:member']:
-                                msg_id = msg['id']
-                                async with session.get(f"{self.base_url}/messages/{msg_id}", headers=headers) as r2:
-                                    msg_detail = await r2.json()
-                                    raw_text = msg_detail.get('text', '') or ''
-                                    raw_html = msg_detail.get('html', '') or ''
-                                    subject = msg_detail.get('subject', '') or ''
+                    url = f"{self.base_url}?action=getMessages&login={self.login}&domain={self.domain}"
+                    async with session.get(url) as r:
+                        messages = await r.json()
+                        if messages and len(messages) > 0:
+                            msg_id = messages[0]['id']
+                            detail_url = f"{self.base_url}?action=readMessage&login={self.login}&domain={self.domain}&id={msg_id}"
+                            async with session.get(detail_url) as r2:
+                                msg_detail = await r2.json()
+                                subject = msg_detail.get('subject', '')
+                                body = msg_detail.get('textBody', '') or msg_detail.get('body', '')
+                                
+                                combined_content = f"{subject}\n{body}"
+                                
+                                if 'MSISDN' in combined_content or 'Activation Code' in combined_content or 'eSIM' in combined_content:
+                                    logger.info("Email sukses eSIM XL ditemukan, mengekstrak detail...")
                                     
-                                    if isinstance(raw_text, list): raw_text = "\n".join(str(x) for x in raw_text)
-                                    if isinstance(raw_html, list): raw_html = "\n".join(str(x) for x in raw_html)
-                                    if isinstance(subject, list): subject = " ".join(str(x) for x in subject)
-
-                                    if not raw_text.strip() and raw_html.strip():
-                                        raw_text = re.sub('<[^<]+?>', '', raw_html)
-
-                                    combined_content = f"{subject}\n{raw_text}\n{raw_html}"
+                                    msisdn = re.search(r'MSISDN\s*[:\s\-]*([0-9\+\s]+)', combined_content, re.IGNORECASE)
+                                    puk = re.search(r'(?:Kode\s*PUK|PUK)\s*[:\s\-]*([0-9\s]+)', combined_content, re.IGNORECASE)
+                                    smdp = re.search(r'SM-DP\+?\s*Address\s*[:\s\-]*([a-zA-Z0-9\.\_\-]+)', combined_content, re.IGNORECASE)
+                                    act_code = re.search(r'Activation\s*Code\s*[:\s\-]*([a-zA-Z0-9\-]+)', combined_content, re.IGNORECASE)
                                     
-                                    if 'MSISDN' in combined_content or 'Activation Code' in combined_content or 'eSIM' in combined_content:
-                                        logger.info("Email sukses eSIM XL ditemukan, mengekstrak detail...")
-                                        
-                                        msisdn = re.search(r'MSISDN\s*[:\s\-]*([0-9\+\s]+)', combined_content, re.IGNORECASE)
-                                        puk = re.search(r'(?:Kode\s*PUK|PUK)\s*[:\s\-]*([0-9\s]+)', combined_content, re.IGNORECASE)
-                                        smdp = re.search(r'SM-DP\+?\s*Address\s*[:\s\-]*([a-zA-Z0-9\.\_\-]+)', combined_content, re.IGNORECASE)
-                                        act_code = re.search(r'Activation\s*Code\s*[:\s\-]*([a-zA-Z0-9\-]+)', combined_content, re.IGNORECASE)
-                                        
-                                        clean_msisdn = msisdn.group(1).strip() if msisdn else '-'
-                                        clean_puk = puk.group(1).strip() if puk else '-'
-                                        clean_smdp = smdp.group(1).strip() if smdp else '-'
-                                        clean_act = act_code.group(1).strip() if act_code else '-'
-                                        
-                                        extracted_info = (
-                                            "✅ <b>Berhasil Claim Esim 50GB 7Hari</b>\n\n"
-                                            "<b>Detail Esim Private Kamu</b>\n"
-                                            "<pre>MSISDN     : " + clean_msisdn + "\n"
-                                            "Kode PUK   : " + clean_puk + "\n"
-                                            "Address    : " + clean_smdp + "\n"
-                                            "Activation : " + clean_act + "\n\n"
-                                            "CREATED    : @forariey</pre>"
-                                        )
-                                        return extracted_info, clean_msisdn, clean_puk, clean_smdp, clean_act
+                                    clean_msisdn = msisdn.group(1).strip() if msisdn else '-'
+                                    clean_puk = puk.group(1).strip() if puk else '-'
+                                    clean_smdp = smdp.group(1).strip() if smdp else '-'
+                                    clean_act = act_code.group(1).strip() if act_code else '-'
+                                    
+                                    extracted_info = (
+                                        "✅ <b>Berhasil Claim Esim 50GB 7Hari</b>\n\n"
+                                        "<b>Detail Esim Private Kamu</b>\n"
+                                        "<pre>MSISDN     : " + clean_msisdn + "\n"
+                                        "Kode PUK   : " + clean_puk + "\n"
+                                        "Address    : " + clean_smdp + "\n"
+                                        "Activation : " + clean_act + "\n\n"
+                                        "CREATED    : @forariey</pre>"
+                                    )
+                                    return extracted_info, clean_msisdn, clean_puk, clean_smdp, clean_act
                 except Exception as e:
                     logger.error(f"Error saat ekstrak detail email XL: {e}")
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
         return f"Email konfirmasi dari XL belum diterima / timeout, akun terdaftar: {self.email}", None, None, None, None
 
 async def process_xl_esim(chat_id, status_callback):
-    temp = MailTMBot()
+    temp = TempMailBot()
     await temp.create_account()
 
     full_name = f"mhmdsari{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}xlstore"
@@ -200,13 +182,11 @@ async def process_xl_esim(chat_id, status_callback):
             logger.info("Ceklis T&C dan Kirim OTP...")
             await status_callback("📤 [LOG: 4/7] Mencentang persetujuan & mengirim OTP...")
             try:
-                # Otomatis centang checkbox Terms & Conditions[span_3](start_span)[span_3](end_span)
                 checkbox = page.locator("input[type='checkbox']")
                 if await checkbox.count() > 0:
                     await checkbox.first.click(force=True)
                     await asyncio.sleep(1)
 
-                # Klik tombol Setuju / Lanjut[span_4](start_span)[span_4](end_span)
                 try:
                     await page.get_by_role("button", name="Setuju").click(timeout=5000)
                 except Exception:
